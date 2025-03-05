@@ -2,179 +2,252 @@ import os
 import mysql.connector
 import hashlib
 import getpass
-from utils import get_int_range, clear_screen
-from termcolor import colored
 from dotenv import load_dotenv
+from utils import get_int_range, clear_screen
 
 load_dotenv()
 
-# Connect to MySQL Database
+# Database Connection
 conn = mysql.connector.connect(
     host=os.environ.get("HOST"),
-    user=os.environ.get("USER"),        
-    password=os.environ.get("PASSWORD"),        
-    database=os.environ.get("DATABASE")
+    user=os.environ.get("USER"),
+    password=os.environ.get("PASSWORD"),
+    database=os.environ.get("DATABASE"),
 )
-
 cursor = conn.cursor()
 
-# Create Tables
-cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(50) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    role ENUM('Admin', 'Employee') NOT NULL
-)''')
+# Master Password (Stored securely in a real-world scenario)
+MASTER_PASSWORD = "SuperSecureMasterKey123"
 
-cursor.execute('''CREATE TABLE IF NOT EXISTS contacts (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    prefix VARCHAR(10),
-    first_name VARCHAR(50) NOT NULL,
-    middle_name VARCHAR(50),
-    last_name VARCHAR(50) NOT NULL,
-    email VARCHAR(100),
-    company VARCHAR(100),
-    position VARCHAR(100)
-)''')
-
-cursor.execute('''CREATE TABLE IF NOT EXISTS phone_numbers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    contact_id INT NOT NULL,
-    type ENUM('Home', 'Work', 'Personal'),
-    number VARCHAR(15) NOT NULL,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
-)''')
-
-conn.commit()
-
-# Ensure Default Admin Exists
-def create_admin():
-    cursor.execute("SELECT * FROM users WHERE username='admin'")
-    if not cursor.fetchone():
-        hashed_password = hashlib.sha256("admin".encode()).hexdigest()
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, 'Admin')", ("admin", hashed_password))
-        conn.commit()
-
-create_admin()
-
-# Password Hashing
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# User Authentication
-def login():
-    username = input("Username: ")
-    password = getpass.getpass("Password: ")
-    hashed_password = hash_password(password)
+def create_company():
+    clear_screen()
+    master_key = getpass.getpass("\U0001F511 Enter the master password to create a company: ")
+    if master_key != MASTER_PASSWORD:
+        print("\u274C Incorrect master password! You are not authorized to create a company.")
+        return
     
-    cursor.execute("SELECT * FROM users WHERE username=%s AND password=%s", (username, hashed_password))
+    name = input("\U0001F3E2 Enter new company name: ").strip()
+    cursor.execute("SELECT company_id FROM companies WHERE name = %s", (name,))
+    if cursor.fetchone():
+        print("\u26A0 A company with this name already exists! Try another name.")
+        return
+    
+    special_access_key = hash_password(input("\U0001F511 Set special access key for company: "))
+    cursor.execute("INSERT INTO companies (name, special_access_key) VALUES (%s, %s)", (name, special_access_key))
+    conn.commit()
+    company_id = cursor.lastrowid
+    
+    print(f"\u2705 Company '{name}' created successfully!")
+    username = input("\U0001F464 Set admin username: ").strip()
+    password = getpass.getpass("\U0001F511 Set admin password: ")
+    
+    cursor.execute("INSERT INTO users (username, password_hash, role, company_id) VALUES (%s, %s, 'admin', %s)",
+                   (username, hash_password(password), company_id))
+    conn.commit()
+    print(f"\u2705 Admin '{username}' created successfully!")
+
+def login_company():
+    clear_screen()
+    cursor.execute("SELECT company_id, name FROM companies")
+    companies = cursor.fetchall()
+    
+    if not companies:
+        print("⚠️ No companies found! Please create a company first.")
+        return None
+    
+    print("\n🏢 Available Companies:")
+    for idx, (company_id, name) in enumerate(companies, start=1):
+        print(f"{idx}. {name}")
+    
+    try:
+        choice = int(input("🔹 Select a company (Enter number): "))
+        if 1 <= choice <= len(companies):
+            return companies[choice - 1][0]  # Return selected company ID
+        else:
+            print("⚠️ Invalid choice!")
+            return None
+    except ValueError:
+        print("⚠️ Please enter a valid number!")
+        return None
+
+def login_user(company_id):
+    clear_screen()
+    username = input("\U0001F464 Enter username: ").strip()
+    password = getpass.getpass("\U0001F511 Enter password: ")
+    
+    cursor.execute("SELECT user_id, role FROM users WHERE username = %s AND password_hash = %s AND company_id = %s",
+                   (username, hash_password(password), company_id))
     user = cursor.fetchone()
     
     if user:
-        return user  
+        print("\u2705 Login successful!")
+        return user[0], user[1], company_id  # (user_id, role, company_id)
     else:
-        print("Invalid login. Try again.")
+        print("\u26A0 Invalid credentials!")
         return None
 
-# Add Employee (Admin Only)
-def add_employee():
-    username = input("Enter new employee username: ")
-    password = getpass.getpass("Enter password: ")
-    hashed_password = hash_password(password)
+def add_employee(company_id, role):
+    if role != 'admin':
+        print("⛔ Only admins can add employees!")
+        return
     
-    try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, 'Employee')", (username, hashed_password))
-        conn.commit()
-        print(f"Employee '{username}' added successfully.")
-    except mysql.connector.IntegrityError:
-        print("Username already exists!")
+    username = input("Enter employee username: ").strip()
+    password = getpass.getpass("Enter employee password: ")
+    cursor.execute("INSERT INTO users (username, password_hash, role, company_id) VALUES (%s, %s, 'employee', %s)",
+                   (username, hash_password(password), company_id))
+    conn.commit()
+    print(f"✅ Employee '{username}' added successfully!")
 
-# View All Contacts
-def view_contacts():
-    cursor.execute("SELECT * FROM contacts")
+def delete_employee(company_id, role):
+    if role != 'admin':
+        print("⛔ Only admins can delete employees!")
+        return
+    
+    username = input("Enter employee username to delete: ").strip()
+    cursor.execute("DELETE FROM users WHERE username = %s AND company_id = %s AND role = 'employee'", (username, company_id))
+    if cursor.rowcount > 0:
+        conn.commit()
+        print(f"✅ Employee '{username}' deleted successfully!")
+    else:
+        print("⚠️ Employee not found or cannot be deleted!")
+
+def view_contacts(company_id):
+    clear_screen()
+    cursor.execute("SELECT contact_id, prefix, first_name, middle_name, last_name, email, home_phone, work_phone, personal_phone, company, position FROM contacts WHERE company_id = %s", (company_id,))
     contacts = cursor.fetchall()
     
     if not contacts:
-        print("No contacts found.")
+        print("📭 No contacts found!")
         return
     
+    print("\n📞 Contact Directory:")
     for contact in contacts:
-        print(f"\nID: {contact[0]}\nName: {contact[1] or ''} {contact[2]} {contact[3] or ''} {contact[4]}\nEmail: {contact[5] or 'N/A'}\nCompany: {contact[6] or 'N/A'}\nPosition: {contact[7] or 'N/A'}")
-        
-        cursor.execute("SELECT type, number FROM phone_numbers WHERE contact_id=%s", (contact[0],))
-        phones = cursor.fetchall()
-        for phone in phones:
-            print(f"   {phone[0]}: {phone[1]}")
+        print("-----------------------------")
+        print(f"ID: {contact[0]}")
+        print(f"👤 Name: {contact[1] or ''} {contact[2]} {contact[3] or ''} {contact[4]}")
+        print(f"📧 Email: {contact[5] or 'N/A'}")
+        print(f"🏠 Home Phone: {contact[6] or 'N/A'}")
+        print(f"💼 Work Phone: {contact[7] or 'N/A'}")
+        print(f"📱 Personal Phone: {contact[8]}")
+        print(f"🏢 Company: {contact[9] or 'N/A'}")
+        print(f"💼 Position: {contact[10] or 'N/A'}")
 
-# Add Contact (Admin Only)
-def add_contact():
-    prefix = input("Prefix (Optional): ")
-    first_name = input("First Name: ")
-    middle_name = input("Middle Name (Optional): ")
-    last_name = input("Last Name: ")
-    email = input("Email (Optional): ")
-    company = input("Company (Optional): ")
-    position = input("Position (Optional): ")
+def add_contact(company_id, role):
+    clear_screen()
+    if role != 'admin':
+        print("⛔ Only admins can add contacts!")
+        return
     
-    cursor.execute("INSERT INTO contacts (prefix, first_name, middle_name, last_name, email, company, position) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                   (prefix, first_name, middle_name, last_name, email, company, position))
-    contact_id = cursor.lastrowid
+    print("\n📌 Add New Contact:")
+    prefix = input("Enter Prefix (Optional): ").strip()
+    first_name = input("Enter First Name: ").strip()
+    middle_name = input("Enter Middle Name (Optional): ").strip()
+    last_name = input("Enter Last Name: ").strip()
+    email = input("Enter Email (Optional): ").strip()
     
-    while True:
-        phone_type = input("Enter phone type (Home/Work/Personal): ")
-        phone_number = input("Enter phone number: ")
-        cursor.execute("INSERT INTO phone_numbers (contact_id, type, number) VALUES (%s, %s, %s)", (contact_id, phone_type, phone_number))
-        more = input("Add another phone number? (y/n): ")
-        if more.lower() != 'y':
-            break
+    # Ensure at least one phone number is provided
+    home_phone = input("Enter Home Phone (Optional): ").strip()
+    work_phone = input("Enter Work Phone (Optional): ").strip()
+    personal_phone = input("Enter Personal Phone (Required): ").strip()
     
+    if not personal_phone:
+        print("⚠️ Personal phone number is required!")
+        return
+    
+    company = input("Enter Company Name (Optional): ").strip()
+    position = input("Enter Position (Optional): ").strip()
+    
+    cursor.execute(
+        "INSERT INTO contacts (company_id, prefix, first_name, middle_name, last_name, email, home_phone, work_phone, personal_phone, company, position) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (company_id, prefix, first_name, middle_name, last_name, email, home_phone, work_phone, personal_phone, company, position)
+    )
     conn.commit()
-    print("Contact added successfully.")
+    print("✅ Contact added successfully!")
 
-# Delete Contact (Admin Only)
-def delete_contact():
-    contact_id = input("Enter Contact ID to delete: ")
-    cursor.execute("DELETE FROM contacts WHERE id=%s", (contact_id,))
+
+def edit_contact(company_id, role):
+    clear_screen()
+    if role != 'admin':
+        print("⛔ Only admins can edit contacts!")
+        return
+    
+    contact_id = input("Enter Contact ID to edit: ").strip()
+    cursor.execute("SELECT * FROM contacts WHERE contact_id = %s AND company_id = %s", (contact_id, company_id))
+    if not cursor.fetchone():
+        print("⚠️ Contact not found or does not belong to your company!")
+        return
+    
+    new_email = input("Enter new email (leave blank to keep current): ").strip()
+    new_position = input("Enter new position (leave blank to keep current): ").strip()
+    
+    cursor.execute("UPDATE contacts SET email = %s, position = %s WHERE contact_id = %s AND company_id = %s",
+                   (new_email or None, new_position or None, contact_id, company_id))
     conn.commit()
-    print("Contact deleted successfully.")
+    print("✅ Contact updated successfully!")
 
-# Main Menu
-def main_menu(user):
+def delete_contact(company_id, role):
+    clear_screen()
+    if role != 'admin':
+        print("⛔ Only admins can delete contacts!")
+        return
+    
+    contact_id = input("Enter Contact ID to delete: ").strip()
+    cursor.execute("DELETE FROM contacts WHERE contact_id = %s AND company_id = %s", (contact_id, company_id))
+    conn.commit()
+    print("✅ Contact deleted successfully!")
+
+def main():
+    clear_screen()
+    print("\U0001F4DE Welcome to the Contact Directory")
     while True:
-        print("\nMain Menu")
-        print("1. View Contacts")
-        print("2. Log Out")
+        print("\n1️⃣ Create New Company (Master Password Required)")
+        print("2️⃣ Log in to a Company")
+        print("3️⃣ Exit")
+        choice = input("🔹 Choose an option: ")
         
-        if user[3] == 'Admin':  # Admin-only options
-            print("3. Add Employee")
-            print("4. Add Contact")
-            print("5. Delete Contact")
-            print(colored("Enter Choice: ", "yellow"), end="")
-
-        choice = get_int_range(1, 2 if user[3] != "Admin" else 5)
-        clear_screen()
-
-        if choice == 1:
-            view_contacts()
-        elif choice == 2:
-            print("Logging out...")
+        if choice == "1":
+            create_company()
+        elif choice == "2":
+            company_id = login_company()
+            if company_id:
+                user = login_user(company_id)
+                if user:
+                    user_id, role, company_id = user
+                    while True:
+                        print("\n📌 Main Menu")
+                        print("1️⃣ View Contacts")
+                        if role == 'admin':
+                            print("2️⃣ Add Contact")
+                            print("3️⃣ Edit Contact")
+                            print("4️⃣ Delete Contact")
+                            print("5️⃣ Add Employee")
+                            print("6️⃣ Delete Employee")
+                        print("7️⃣ Logout")
+                        
+                        option = input("🔹 Choose an option: ")
+                        
+                        if option == "1":
+                            view_contacts(company_id)
+                        elif option == "2" and role == 'admin':
+                            add_contact(company_id, role)
+                        elif option == "3" and role == 'admin':
+                            edit_contact(company_id, role)
+                        elif option == "4" and role == 'admin':
+                            delete_contact(company_id, role)
+                        elif option == "5" and role == 'admin':
+                            add_employee(company_id, role)
+                        elif option == "6" and role == 'admin':
+                            delete_employee(company_id, role)
+                        elif option == "7":
+                            print("\U0001F44B Logging out...")
+                            break
+        elif choice == "3":
+            print("👋 Goodbye!")
             break
-        elif choice == 3 and user[3] == 'Admin':
-            add_employee()
-        elif choice == 4 and user[3] == 'Admin':
-            add_contact()
-        elif choice == 5 and user[3] == 'Admin':
-            delete_contact()
-        else:
-            print("Invalid choice. Try again.")
 
-# Start App
-def run():
-    while True:
-        user = login()
-        if user:
-            main_menu(user)
-
-# Run the app
 if __name__ == "__main__":
-    run()
+    main()
