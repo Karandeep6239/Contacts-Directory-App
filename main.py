@@ -116,7 +116,7 @@ def delete_employee(company_id, role):
 
 def view_contacts(company_id):
     clear_screen()
-    cursor.execute("SELECT contact_id, prefix, first_name, middle_name, last_name, email, home_phone, work_phone, personal_phone, company, position FROM contacts WHERE company_id = %s", (company_id,))
+    cursor.execute("SELECT contact_id, first_name, last_name FROM contacts WHERE company_id = %s", (company_id,))
     contacts = cursor.fetchall()
     
     if not contacts:
@@ -124,16 +124,52 @@ def view_contacts(company_id):
         return
     
     print("\n📞 Contact Directory:")
-    for contact in contacts:
-        print("-----------------------------")
-        print(f"ID: {contact[0]}")
-        print(f"👤 Name: {contact[1] or ''} {contact[2]} {contact[3] or ''} {contact[4]}")
-        print(f"📧 Email: {contact[5] or 'N/A'}")
-        print(f"🏠 Home Phone: {contact[6] or 'N/A'}")
-        print(f"💼 Work Phone: {contact[7] or 'N/A'}")
-        print(f"📱 Personal Phone: {contact[8]}")
-        print(f"🏢 Company: {contact[9] or 'N/A'}")
-        print(f"💼 Position: {contact[10] or 'N/A'}")
+    contact_dict = {}  # Dictionary to map IDs for selection
+
+    for index, contact in enumerate(contacts, start=1):
+        contact_id, first_name, last_name = contact
+        contact_dict[index] = contact_id  # Map index to contact_id
+        print(f"{index}. {first_name} {last_name}")
+
+    while True:
+        try:
+            choice = int(input("\nEnter the number of the contact to view details (or 0 to go back): "))
+            if choice == 0:
+                return
+            if choice in contact_dict:
+                selected_id = contact_dict[choice]
+                show_contact_details(selected_id)
+                break  # Exit loop after showing details
+            else:
+                print("❌ Invalid choice. Please select a valid number.")
+        except ValueError:
+            print("❌ Please enter a valid number.")
+
+def show_contact_details(contact_id):
+    clear_screen()
+    cursor.execute("""
+        SELECT contact_id, prefix, first_name, middle_name, last_name, email, 
+               home_phone, work_phone, personal_phone, company, position 
+        FROM contacts WHERE contact_id = %s
+    """, (contact_id,))
+    
+    contact = cursor.fetchone()
+    
+    if not contact:
+        print("❌ Contact not found!")
+        return
+
+    print("\n📞 Contact Details:")
+    print("-----------------------------")
+    print(f"ID: {contact[0]}")
+    print(f"👤 Name: {contact[1] or ''} {contact[2]} {contact[3] or ''} {contact[4]}")
+    print(f"📧 Email: {contact[5] or 'N/A'}")
+    print(f"🏠 Home Phone: {contact[6] or 'N/A'}")
+    print(f"💼 Work Phone: {contact[7] or 'N/A'}")
+    print(f"📱 Personal Phone: {contact[8]}")
+    print(f"🏢 Company: {contact[9] or 'N/A'}")
+    print(f"💼 Position: {contact[10] or 'N/A'}")
+
 
 def add_contact(company_id, role):
     clear_screen()
@@ -171,23 +207,83 @@ def add_contact(company_id, role):
 
 def edit_contact(company_id, role):
     clear_screen()
+
     if role != 'admin':
         print("⛔ Only admins can edit contacts!")
         return
+
+    # Fetch and display contact names and IDs
+    cursor.execute("SELECT contact_id, first_name, last_name FROM contacts WHERE company_id = %s", (company_id,))
+    contacts = cursor.fetchall()
+
+    if not contacts:
+        print("📭 No contacts found!")
+        return
+
+    print("\n📞 Contact Directory:")
+    contact_dict = {}  # Map index to contact_id
+
+    for index, contact in enumerate(contacts, start=1):
+        contact_id, first_name, last_name = contact
+        contact_dict[index] = contact_id
+        print(f"{index}. {first_name} {last_name}")
+
+    while True:
+        try:
+            choice = int(input("\nEnter the number of the contact to edit (or 0 to cancel): "))
+            if choice == 0:
+                return
+            if choice in contact_dict:
+                selected_id = contact_dict[choice]
+                break
+            else:
+                print("❌ Invalid choice. Please select a valid number.")
+        except ValueError:
+            print("❌ Please enter a valid number.")
+
+    # Fetch current details of the selected contact
+    cursor.execute("""
+        SELECT prefix, first_name, middle_name, last_name, email, 
+               home_phone, work_phone, personal_phone, company, position 
+        FROM contacts WHERE contact_id = %s AND company_id = %s
+    """, (selected_id, company_id))
     
-    contact_id = input("Enter Contact ID to edit: ").strip()
-    cursor.execute("SELECT * FROM contacts WHERE contact_id = %s AND company_id = %s", (contact_id, company_id))
-    if not cursor.fetchone():
+    contact = cursor.fetchone()
+
+    if not contact:
         print("⚠️ Contact not found or does not belong to your company!")
         return
-    
-    new_email = input("Enter new email (leave blank to keep current): ").strip()
-    new_position = input("Enter new position (leave blank to keep current): ").strip()
-    
-    cursor.execute("UPDATE contacts SET email = %s, position = %s WHERE contact_id = %s AND company_id = %s",
-                   (new_email or None, new_position or None, contact_id, company_id))
+
+    (current_prefix, current_first, current_middle, current_last, current_email, 
+     current_home, current_work, current_personal, current_company, current_position) = contact
+
+    # Prompt user to enter new values (leave blank to keep existing ones)
+    print("\n📝 Edit Contact Details (leave blank to keep current values)")
+    new_prefix = input(f"Enter new prefix [{current_prefix or 'N/A'}]: ").strip() or current_prefix
+    new_first = input(f"Enter new first name [{current_first}]: ").strip() or current_first
+    new_middle = input(f"Enter new middle name [{current_middle or 'N/A'}]: ").strip() or current_middle
+    new_last = input(f"Enter new last name [{current_last}]: ").strip() or current_last
+    new_email = input(f"Enter new email [{current_email or 'N/A'}]: ").strip() or current_email
+    new_home = input(f"Enter new home phone [{current_home or 'N/A'}]: ").strip() or current_home
+    new_work = input(f"Enter new work phone [{current_work or 'N/A'}]: ").strip() or current_work
+    new_personal = input(f"Enter new personal phone [{current_personal}]: ").strip() or current_personal
+    new_company = input(f"Enter new company [{current_company or 'N/A'}]: ").strip() or current_company
+    new_position = input(f"Enter new position [{current_position or 'N/A'}]: ").strip() or current_position
+
+    # Update database with new values
+    cursor.execute("""
+        UPDATE contacts 
+        SET prefix = %s, first_name = %s, middle_name = %s, last_name = %s, 
+            email = %s, home_phone = %s, work_phone = %s, personal_phone = %s, 
+            company = %s, position = %s
+        WHERE contact_id = %s AND company_id = %s
+    """, (new_prefix, new_first, new_middle, new_last, new_email, 
+          new_home, new_work, new_personal, new_company, new_position, 
+          selected_id, company_id))
+
     conn.commit()
     print("✅ Contact updated successfully!")
+
 
 def delete_contact(company_id, role):
     clear_screen()
